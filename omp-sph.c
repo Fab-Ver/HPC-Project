@@ -28,7 +28,7 @@
  * SOFTWARE.
  *
  ****************************************************************************/
-
+#include "hpc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -217,8 +217,13 @@ void compute_forces( void )
     }
 }
 
+/**
+ * Since there aren't dependencies crossing iteration boundaries, the iteration fo the loop
+ * can be executed by any thread in any order, it can be fully parallelized (embarrassingly parallel).
+*/
 void integrate( void )
 {
+#pragma omp parallel for default(none) shared(particles, n_particles, DT, EPS, BOUND_DAMPING, VIEW_WIDTH, VIEW_HEIGHT)
     for (int i=0; i<n_particles; i++) {
         particle_t *p = &particles[i];
         // forward Euler integration
@@ -247,12 +252,15 @@ void integrate( void )
     }
 }
 
+/**
+ * The function can be easily parallelized using the reduction pattern, 
+ * in particular using the OpenMP reduction clause. 
+*/
 float avg_velocities( void )
 {
     double result = 0.0;
+#pragma omp parallel for reduction(+:result) default(none) shared(particles, n_particles)
     for (int i=0; i<n_particles; i++) {
-        /* the hypot(x,y) function is equivalent to sqrt(x*x +
-           y*y); */
         result += hypot(particles[i].vx, particles[i].vy) / n_particles;
     }
     return result;
@@ -294,6 +302,7 @@ int main(int argc, char **argv)
     }
 
     init_sph(n);
+    double time_start = hpc_gettime();
     for (int s=0; s<nsteps; s++) {
         update();
         /* the average velocities MUST be computed at each step, even
@@ -303,6 +312,8 @@ int main(int argc, char **argv)
         if (s % 10 == 0)
             printf("step %5d, avgV=%f\n", s, avg);
     }
+    double time_elapsed = hpc_gettime() - time_start;
+    printf("Elapsed Time: %f\n", time_elapsed);
     
     free(particles);
     return EXIT_SUCCESS;
