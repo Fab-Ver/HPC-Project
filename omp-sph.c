@@ -54,10 +54,6 @@ const float VISC = 200;         // viscosity constant
 const float DT = 0.0007;        // integration timestep
 const float BOUND_DAMPING = -0.5;
 
-// rendering projection parameters
-// (the following ought to be "const float", but then the compiler
-// would give an error because VIEW_WIDTH and VIEW_HEIGHT are
-// initialized with non-literal expressions)
 const int MAX_PARTICLES = 20000;
 // Larger window size to accommodate more particles
 #define WINDOW_WIDTH 3000
