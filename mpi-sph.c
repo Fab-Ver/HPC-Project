@@ -1,3 +1,6 @@
+/**
+ * Fabio Veroli 0000970669 fabio.veroli@studio.unibo.it
+*/
 /****************************************************************************
  *
  * sph.c -- Smoothed Particle Hydrodynamics
@@ -28,7 +31,8 @@
  * SOFTWARE.
  *
  ****************************************************************************/
-
+#include "hpc.h"
+#include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -51,10 +55,6 @@ const float VISC = 200;         // viscosity constant
 const float DT = 0.0007;        // integration timestep
 const float BOUND_DAMPING = -0.5;
 
-// rendering projection parameters
-// (the following ought to be "const float", but then the compiler
-// would give an error because VIEW_WIDTH and VIEW_HEIGHT are
-// initialized with non-literal expressions)
 const int MAX_PARTICLES = 20000;
 // Larger window size to accommodate more particles
 #define WINDOW_WIDTH 3000
@@ -77,8 +77,18 @@ typedef struct {
     float rho, p;       // density, pressure
 } particle_t;
 
-particle_t *particles;
+particle_t *particles; //All particles
+particle_t *local_particles; //Local particles for each processor
+
 int n_particles = 0;    // number of currently active particles
+int n_local_particles = 0; // number of currently active particles in each process
+
+/* Parameters used in Scatterv() and Allgatherv()*/
+int *sendcounts = NULL; 
+int *displs = NULL;
+
+/* Custom MPI Datatype used in the collective communication functions */
+MPI_Datatype particles_type;
 
 /**
  * Return a random value in [a, b]
@@ -145,9 +155,10 @@ void init_sph( int n )
 }
 
 /**
- ** You may parallelize the following four functions
- **/
-
+ * Each process compute density and pressure of its subset of particles.
+ * Note that only the outer loop is partitioned across the process, 
+ * while the inner loop is execute serially for every value of i. 
+*/
 void compute_density_pressure( void )
 {
     const float HSQ = H * H;    // radius^2 for optimization
@@ -157,8 +168,8 @@ void compute_density_pressure( void )
        et al. */
     const float POLY6 = 4.0 / (M_PI * pow(H, 8));
 
-    for (int i=0; i<n_particles; i++) {
-        particle_t *pi = &particles[i];
+    for (int i=0; i<n_local_particles; i++) {
+        particle_t *pi = &local_particles[i];
         pi->rho = 0.0;
         for (int j=0; j<n_particles; j++) {
             const particle_t *pj = &particles[j];
@@ -175,6 +186,11 @@ void compute_density_pressure( void )
     }
 }
 
+/**
+ * Each process compute forces of its subset of particles.
+ * Note that only the outer loop is partitioned across the process, 
+ * while the inner loop is execute serially for every value of i. 
+*/
 void compute_forces( void )
 {
     /* Smoothing kernels defined in Muller and their gradients adapted
@@ -184,8 +200,8 @@ void compute_forces( void )
     const float VISC_LAP = 40.0 / (M_PI * pow(H, 5));
     const float EPS = 1e-6;
 
-    for (int i=0; i<n_particles; i++) {
-        particle_t *pi = &particles[i];
+    for (int i=0; i<n_local_particles; i++) {
+        particle_t *pi = &local_particles[i];
         float fpress_x = 0.0, fpress_y = 0.0;
         float fvisc_x = 0.0, fvisc_y = 0.0;
 
@@ -217,10 +233,13 @@ void compute_forces( void )
     }
 }
 
+/**
+ * Each process updates the properties of its subset of particles. 
+*/
 void integrate( void )
 {
-    for (int i=0; i<n_particles; i++) {
-        particle_t *p = &particles[i];
+    for (int i=0; i<n_local_particles; i++) {
+        particle_t *p = &local_particles[i];
         // forward Euler integration
         p->vx += DT * p->fx / p->rho;
         p->vy += DT * p->fy / p->rho;
@@ -247,22 +266,80 @@ void integrate( void )
     }
 }
 
+/**
+ * Each process compute the avg_velocities for its subset of particles. 
+*/
 float avg_velocities( void )
 {
     double result = 0.0;
-    for (int i=0; i<n_particles; i++) {
-        /* the hypot(x,y) function is equivalent to sqrt(x*x +
-           y*y); */
-        result += hypot(particles[i].vx, particles[i].vy) / n_particles;
+    for (int i=0; i<n_local_particles; i++) {
+        result += hypot(local_particles[i].vx, local_particles[i].vy) / n_particles;
     }
     return result;
 }
 
 void update( void )
-{
+{   
+    /**
+     * Every process receives its particles subset. 
+    */
+    MPI_Scatterv( particles,        /* sendbuf            */
+                  sendcounts,       /* sendcounts         */
+                  displs,           /* displacements      */
+                  particles_type,   /* sent datatype      */
+                  local_particles,  /* recvbuf            */
+                  n_local_particles,/* recvcount          */
+                  particles_type,   /* received datatype  */
+                  0,                /* source             */
+                  MPI_COMM_WORLD    /* communicator       */
+                );
     compute_density_pressure();
+
+    /**
+     * Particles properties has been modified, the particles array 
+     * needs to be updated and redistributed to all the process. 
+     * We use the MPI_Allgatherv() function to this purpose, equals to a
+     * Gatherv() followed by a Bcast().
+    */
+    MPI_Allgatherv( local_particles,  /* sendbuf            */
+                    n_local_particles,/* sendcounts         */
+                    particles_type,   /* sent datatype      */
+                    particles,        /* recvbuf            */
+                    sendcounts,       /* recvcount          */
+                    displs,           /* displacements      */
+                    particles_type,   /* received datatype  */
+                    MPI_COMM_WORLD    /* communicator       */
+                    ); 
+
     compute_forces();
+
+    /**
+     * Same as above the particles need to be redistributed to all the process.
+    */
+    MPI_Allgatherv( local_particles,  /* sendbuf            */
+                    n_local_particles,/* sendcounts         */
+                    particles_type,   /* sent datatype      */
+                    particles,        /* recvbuf            */
+                    sendcounts,       /* recvcount          */
+                    displs,           /* displacements      */
+                    particles_type,   /* received datatype  */
+                    MPI_COMM_WORLD    /* communicator       */
+                    ); 
+
     integrate();
+    
+    /**
+     * Same as above the particles need to be redistributed to all the process.
+    */
+    MPI_Allgatherv( local_particles,  /* sendbuf            */
+                    n_local_particles,/* sendcounts         */
+                    particles_type,   /* sent datatype      */
+                    particles,        /* recvbuf            */
+                    sendcounts,       /* recvcount          */
+                    displs,           /* displacements      */
+                    particles_type,   /* received datatype  */
+                    MPI_COMM_WORLD    /* communicator       */
+                    );
 }
 
 int main(int argc, char **argv)
@@ -275,35 +352,113 @@ int main(int argc, char **argv)
     int n = DAM_PARTICLES;
     int nsteps = 50;
 
-    if (argc > 3) {
-        fprintf(stderr, "Usage: %s [nparticles [nsteps]]\n", argv[0]);
-        return EXIT_FAILURE;
+    /*Initialize the communication*/
+    int my_rank, comm_sz;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
+    
+    /**
+     * Define a custom datatype, the particles structure can be seen as a
+     * contiguous block of 8 MPI_FLOAT 
+    */
+    MPI_Type_contiguous( 8, MPI_FLOAT, &particles_type);
+    MPI_Type_commit(&particles_type);
+
+    /**
+     * Only the master process (rank 0) checks the input parameters and initialize the particles. 
+    */
+    if(my_rank == 0){
+        if (argc > 3) {
+            fprintf(stderr, "Usage: %s [nparticles [nsteps]]\n", argv[0]);
+            MPI_Finalize();
+            return EXIT_FAILURE;
+        }
+
+        if (argc > 1) {
+            n = atoi(argv[1]);
+        }
+
+        if (argc > 2) {
+            nsteps = atoi(argv[2]);
+        }
+
+        if (n > MAX_PARTICLES) {
+            fprintf(stderr, "FATAL: the maximum number of particles is %d\n", MAX_PARTICLES);
+            MPI_Finalize();
+            return EXIT_FAILURE;
+        }
+
+        init_sph(n);
     }
 
-    if (argc > 1) {
-        n = atoi(argv[1]);
+    /**
+     * The master broadcast to all the other process the n_particles, n_steps and the complete particles array.
+    */
+    MPI_Bcast(&n_particles, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&nsteps, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(particles, n_particles, particles_type, 0, MPI_COMM_WORLD);
+
+    /**
+     * Allocate memory for the parameters used in the MPI_Scatterv() and MPI_Allgatherv()
+    */
+    sendcounts = (int*)malloc(comm_sz * sizeof(*sendcounts)); assert(sendcounts != NULL);
+    displs = (int*)malloc(comm_sz * sizeof(*displs)); assert(displs != NULL);
+
+    /*Compute the starting and ending position of each block*/
+    for(int i=0; i<comm_sz; i++){
+        const int start = n_particles*i/comm_sz;
+        const int end = n_particles*(i+1)/comm_sz;
+        const int blklen = end - start;
+        sendcounts[i] = blklen;
+        displs[i] = start;
     }
 
-    if (argc > 2) {
-        nsteps = atoi(argv[2]);
+    n_local_particles = sendcounts[my_rank]; /* How many particles this process must handle */
+    local_particles = (particle_t*)malloc(n_local_particles * sizeof(*local_particles)); assert(local_particles != NULL); /* Allocate the local particles array*/
+
+    /**
+     * Only the master process keeps track of the time
+    */
+    double time_start;
+    if(my_rank == 0){
+        time_start = hpc_gettime();
     }
 
-    if (n > MAX_PARTICLES) {
-        fprintf(stderr, "FATAL: the maximum number of particles is %d\n", MAX_PARTICLES);
-        return EXIT_FAILURE;
-    }
-
-    init_sph(n);
     for (int s=0; s<nsteps; s++) {
         update();
+        
         /* the average velocities MUST be computed at each step, even
            if it is not shown (to ensure constant workload per
            iteration) */
-        const float avg = avg_velocities();
-        if (s % 10 == 0)
+        const float local_avg = avg_velocities();
+        float avg = 0.0;
+
+        /**
+         * Perform a reduction to obtain the avg velocity from the local result. 
+        */
+        MPI_Reduce( &local_avg,  /* send buffer     */
+                    &avg,        /* receive buffer  */
+                    1,              /* count           */
+                    MPI_FLOAT,     /* datatype        */
+                    MPI_SUM,        /* operation       */
+                    0,              /* destination     */
+                    MPI_COMM_WORLD  /* communicator    */
+                    );
+
+        if (my_rank == 0 && s % 10 == 0)
             printf("step %5d, avgV=%f\n", s, avg);
     }
+
+    if(my_rank == 0){
+        double time_elapsed = hpc_gettime() - time_start;
+        printf("Elapsed Time: %f\n", time_elapsed);
+    }
     
+    MPI_Finalize();
     free(particles);
+    free(sendcounts);
+    free(displs);
+    free(local_particles);
     return EXIT_SUCCESS;
 }
