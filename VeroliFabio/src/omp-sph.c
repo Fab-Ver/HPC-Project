@@ -343,8 +343,18 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    if (n <= 0){
+        fprintf(stderr, "ERROR: enter a positive number of particles\n");
+        return EXIT_FAILURE;
+    }
+
+    if (nsteps <= 0){
+        fprintf(stderr, "ERROR: enter a positive number of steps\n");
+        return EXIT_FAILURE;
+    }
+
     init_sph(n);
-    
+
     double time_start = hpc_gettime();
     for (int s=0; s<nsteps; s++) {
         update();

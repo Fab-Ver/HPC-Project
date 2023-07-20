@@ -371,6 +371,7 @@ int main(int argc, char **argv)
     if(my_rank == 0){
         if (argc > 3) {
             fprintf(stderr, "Usage: %s [nparticles [nsteps]]\n", argv[0]);
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
             MPI_Finalize();
             return EXIT_FAILURE;
         }
@@ -385,6 +386,21 @@ int main(int argc, char **argv)
 
         if (n > MAX_PARTICLES) {
             fprintf(stderr, "FATAL: the maximum number of particles is %d\n", MAX_PARTICLES);
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+            MPI_Finalize();
+            return EXIT_FAILURE;
+        }
+
+        if (n <= 0){
+            fprintf(stderr, "ERROR: enter a positive number of particles\n");
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+            MPI_Finalize();
+            return EXIT_FAILURE;
+        }
+
+        if (nsteps <= 0){
+            fprintf(stderr, "ERROR: enter a positive number of steps\n");
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
             MPI_Finalize();
             return EXIT_FAILURE;
         }
