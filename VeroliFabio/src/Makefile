@@ -10,7 +10,7 @@
 #
 # - all: builds both the OpenMP and MPI versions
 #
-# - clean: clean up
+# - clean: removes executables of both versions
 #
 
 CFLAGS=-std=c99 -Wall -Wpedantic
