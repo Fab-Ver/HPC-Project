@@ -9,8 +9,9 @@ Per compilare i programmi, all'interno della cartella `src`, eseguire uno dei se
 
 Una volta compilati i programmi possono essere eseguiti utilizzando i comandi: 
 - `OMP_NUM_THREADS=NT ./omp-sph [N [S]]`: versione OpenMP.
-- `mpirun -n NT ./mpi-sph [N [S]]`: versione MPI. 
-dove NT è il numero di thread/processi, N è il numero di particelle e S è il numero di passi da simulare (S e N > 0).
+- `mpirun -n NT ./mpi-sph [N [S]]`: versione MPI.
+
+dove NT è il numero di thread/processi, N è il numero di particelle e S è il numero di passi da simulare (S, N > 0).
 
 Utilizzare il comando `make clean` per eliminare gli eseguibili di entrambe le versioni proposte. 
 
